@@ -1,0 +1,49 @@
+# PIPELINE DEFINITION
+# Name: movie-dataflow-pipeline
+# Description: Preprocess data using Google Cloud Dataflow with a custom container.
+# Inputs:
+#    gcs_bucket_name: str [Default: 'movie-data-1']
+components:
+  comp-dataflowpreprocessing:
+    executorLabel: exec-dataflowpreprocessing
+    inputDefinitions:
+      parameters:
+        bucket:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-dataflowpreprocessing:
+      container:
+        args:
+        - --staging_location=gs://{{inputs.bucket}}/staging
+        - --temp_location=gs://{{inputs.bucket}}/temp
+        - --output=gs://{{inputs.bucket}}/preprocessed_data
+        command:
+        - python3
+        - /src/main.py
+        image: us-central1-docker.pkg.dev/oolola/oolola-repo/moviedata-dataflow_preprocessing:latest
+pipelineInfo:
+  description: Preprocess data using Google Cloud Dataflow with a custom container.
+  name: movie-dataflow-pipeline
+root:
+  dag:
+    tasks:
+      dataflowpreprocessing:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-dataflowpreprocessing
+        inputs:
+          parameters:
+            bucket:
+              componentInputParameter: gcs_bucket_name
+        taskInfo:
+          name: dataflowpreprocessing
+  inputDefinitions:
+    parameters:
+      gcs_bucket_name:
+        defaultValue: movie-data-1
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.11.0

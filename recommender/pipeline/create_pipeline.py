@@ -42,7 +42,8 @@ if __name__ == '__main__':
         pipeline_root='gs://pipeline-root-1',
         parameter_values={
             'gcs_bucket_name': 'movie-data-1'
-        }
+        },
+        enable_caching=False
     )
 
     job.submit(service_account='pipeline-svc-acct@oolola.iam.gserviceaccount.com')

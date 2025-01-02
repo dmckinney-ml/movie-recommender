@@ -14,7 +14,7 @@ google_cloud_options.temp_location = 'gs://movie-data-1/temp'  # Your GCS temp b
 # Define the pipeline
 def run():
     with beam.Pipeline(options=options) as p:
-        # Read from BigQuery
+        # Read from BigQuery and extract unique genres
         movies = (
             p
             | "Read Movies Table" >> beam.io.ReadFromBigQuery(
@@ -41,11 +41,33 @@ def run():
             | "Map Ratings to Key-Value Pairs" >> beam.Map(lambda row: (row['movieId'], row))
         )
 
+        # Extract unique genres from the movies data
+        unique_genres = [
+            'Action',
+            'Adventure',
+            'Animation',
+            'Children',
+            'Comedy',
+            'Crime',
+            'Drama',
+            'Fantasy',
+            'Film-Noir',
+            'Horror',
+            'IMAX',
+            'Musical',
+            'Mystery',
+            'Romance',
+            'Sci-Fi',
+            'Thriller',
+            'War',
+            'Western'
+        ]
+
         # Perform data transformations
         preprocessed_data = (
             {'movies': movies, 'ratings': ratings}
             | "Join Data" >> beam.CoGroupByKey()
-            | "Transform Data" >> beam.FlatMap(preprocess_data)  # Use FlatMap to yield multiple results
+            | "Transform Data" >> beam.FlatMap(preprocess_data, unique_genres=unique_genres)  # Pass unique genres for encoding
         )
 
         # Write the preprocessed data to BigQuery
@@ -56,23 +78,27 @@ def run():
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
         )
 
-# Update the preprocess_data function
-def preprocess_data(element):
+# Update the preprocess_data function to dynamically accept genres
+def preprocess_data(element, unique_genres):
     movie_id, grouped_data = element
     movies = {movie['movieId']: movie for movie in grouped_data['movies']}
     ratings = grouped_data['ratings']
 
-    # Join data logic
     for rating in ratings:
+        # Get the genres for the current movie
+        movie_genres = movies.get(rating['movieId'], {}).get('genres', '').split('|')
+
+        # Generate multi-hot encoding vector for the movie
+        genre_vector = [1 if genre in movie_genres else 0 for genre in unique_genres]
+
         yield {
             'userId': rating['userId'],
             'movieId': rating['movieId'],
             'title': movies.get(rating['movieId'], {}).get('title', None),
-            'genres': movies.get(rating['movieId'], {}).get('genres', None),
+            'genres': genre_vector,  # Use the multi-hot encoding for genres
             'rating': rating['rating'],
             'timestamp': rating['timestamp'],
         }
-
 
 # Dynamically generate the BigQuery schema
 def get_bq_schema():
@@ -81,12 +107,11 @@ def get_bq_schema():
             {'name': 'userId', 'type': 'INTEGER'},
             {'name': 'movieId', 'type': 'INTEGER'},
             {'name': 'title', 'type': 'STRING'},
-            {'name': 'genres', 'type': 'STRING'},
+            {'name': 'genres', 'type': 'INTEGER', 'mode': 'REPEATED'},
             {'name': 'rating', 'type': 'FLOAT'},
             {'name': 'timestamp', 'type': 'TIMESTAMP'},
         ]
     }
-
 
 if __name__ == "__main__":
     run()

@@ -100,7 +100,6 @@ def preprocess_data(element, unique_genres):
             'timestamp': rating['timestamp'],
         }
 
-# Dynamically generate the BigQuery schema
 def get_bq_schema():
     return {
         'fields': [

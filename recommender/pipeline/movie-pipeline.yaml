@@ -1,9 +1,67 @@
 # PIPELINE DEFINITION
-# Name: movie-dataflow-pipeline
-# Description: Preprocess data using Google Cloud Dataflow with a custom container.
+# Name: movie-recommendation-pipeline
+# Description: Preprocess data using Google Cloud Dataflow with a custom container and train a BigQuery model.
 # Inputs:
 #    gcs_bucket_name: str [Default: 'movie-data-1']
 components:
+  comp-bigquery-create-model-job:
+    executorLabel: exec-bigquery-create-model-job
+    inputDefinitions:
+      parameters:
+        job_configuration_query:
+          defaultValue: {}
+          description: A json formatted string describing the rest of the job configuration.
+            For more details, see https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobConfigurationQuery
+          isOptional: true
+          parameterType: STRUCT
+        labels:
+          defaultValue: {}
+          description: 'The labels associated with this job. You can use these to
+            organize and group your jobs. Label keys and values can be no longer than
+            63 characters, can only containlowercase letters, numeric characters,
+            underscores and dashes. International characters are allowed. Label values
+            are optional. Label keys must start with a letter and each label in the
+            list must have a different key.
+
+            Example: { "name": "wrench", "mass": "1.3kg", "count": "3" }.'
+          isOptional: true
+          parameterType: STRUCT
+        location:
+          defaultValue: us-central1
+          description: Location of the job to create the BigQuery model. If not set,
+            default to `US` multi-region.  For more details, see https://cloud.google.com/bigquery/docs/locations#specifying_your_location
+          isOptional: true
+          parameterType: STRING
+        project:
+          defaultValue: '{{$.pipeline_google_cloud_project_id}}'
+          description: Project to run BigQuery model creation job. Defaults to the
+            project in which the PipelineJob is run.
+          isOptional: true
+          parameterType: STRING
+        query:
+          description: SQL query text to execute. Only standard SQL is supported.  If
+            query are both specified in here and in job_configuration_query, the value
+            in here will override the other one.
+          parameterType: STRING
+        query_parameters:
+          defaultValue: []
+          description: Query parameters for standard SQL queries. If query_parameters
+            are both specified in here and in job_configuration_query, the value in
+            here will override the other one.
+          isOptional: true
+          parameterType: LIST
+    outputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: google.BQMLModel
+            schemaVersion: 0.0.1
+          description: Describes the model which is created.
+      parameters:
+        gcp_resources:
+          description: Serialized gcp_resources proto tracking the BigQuery job. For
+            more details, see https://github.com/kubeflow/pipelines/blob/master/components/google-cloud/google_cloud_pipeline_components/proto/README.md.
+          parameterType: STRING
   comp-dataflowpreprocessing:
     executorLabel: exec-dataflowpreprocessing
     inputDefinitions:
@@ -12,6 +70,32 @@ components:
           parameterType: STRING
 deploymentSpec:
   executors:
+    exec-bigquery-create-model-job:
+      container:
+        args:
+        - --type
+        - BigqueryCreateModelJob
+        - --project
+        - '{{$.inputs.parameters[''project'']}}'
+        - --location
+        - '{{$.inputs.parameters[''location'']}}'
+        - --payload
+        - '{"Concat": ["{", "\"configuration\": {", "\"query\": ", "{{$.inputs.parameters[''job_configuration_query'']}}",
+          ", \"labels\": ", "{{$.inputs.parameters[''labels'']}}", "}", "}"]}'
+        - --job_configuration_query_override
+        - '{"Concat": ["{", "\"query\": \"", "{{$.inputs.parameters[''query'']}}",
+          "\"", ", \"query_parameters\": ", "{{$.inputs.parameters[''query_parameters'']}}",
+          "}"]}'
+        - --gcp_resources
+        - '{{$.outputs.parameters[''gcp_resources''].output_file}}'
+        - --executor_input
+        - '{{$}}'
+        command:
+        - python3
+        - -u
+        - -m
+        - google_cloud_pipeline_components.container.v1.bigquery.create_model.launcher
+        image: gcr.io/ml-pipeline/google-cloud-pipeline-components:2.18.0
     exec-dataflowpreprocessing:
       container:
         args:
@@ -23,11 +107,34 @@ deploymentSpec:
         - /src/main.py
         image: us-central1-docker.pkg.dev/oolola/oolola-repo/moviedata-dataflow_preprocessing:latest
 pipelineInfo:
-  description: Preprocess data using Google Cloud Dataflow with a custom container.
-  name: movie-dataflow-pipeline
+  description: Preprocess data using Google Cloud Dataflow with a custom container
+    and train a BigQuery model.
+  name: movie-recommendation-pipeline
 root:
   dag:
     tasks:
+      bigquery-create-model-job:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-bigquery-create-model-job
+        dependentTasks:
+        - dataflowpreprocessing
+        inputs:
+          parameters:
+            location:
+              runtimeValue:
+                constant: us-central1
+            project:
+              runtimeValue:
+                constant: oolola
+            query:
+              runtimeValue:
+                constant: "CREATE OR REPLACE MODEL `oolola.movie_data.recommendation_model`\n\
+                  \                 OPTIONS(model_type='matrix_factorization') AS\n\
+                  \                 SELECT * FROM `oolola.movie_data.preprocessed_data`"
+        taskInfo:
+          name: bigquery-create-model-job
       dataflowpreprocessing:
         cachingOptions:
           enableCache: true
@@ -46,4 +153,4 @@ root:
         isOptional: true
         parameterType: STRING
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.11.0
+sdkVersion: kfp-2.10.1

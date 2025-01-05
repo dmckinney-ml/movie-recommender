@@ -1,5 +1,5 @@
 # Use a lightweight Python 3.12 image as the base
-FROM apache/beam_python3.12_sdk:2.61.0
+FROM python3.7.3-slim
 
 # Set the working directory
 WORKDIR /src
@@ -9,6 +9,8 @@ RUN apt-get update && \
 
 # Copy the application code into the container
 COPY . /src
+
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Set the entrypoint to run the main script
 ENTRYPOINT ["python3", "/src/main.py"]

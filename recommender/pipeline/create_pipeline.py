@@ -26,7 +26,7 @@ def pipeline(
         bucket=gcs_bucket_name
     )
 
-# Compile the pipeline into a .tar.gz file
+# Compile the pipeline into a .yaml file
 if __name__ == '__main__':
     # Compile the pipeline
     compiler.Compiler().compile(pipeline, PIPELINE_YAML, type_check=False)

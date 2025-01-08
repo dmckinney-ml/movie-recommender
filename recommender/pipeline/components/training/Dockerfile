@@ -1,5 +1,6 @@
-# Use a lightweight Python 3.12 image as the base
-FROM python3.7.3-slim
+# Use a lightweight Python 3.7.3 image as the base
+FROM python:3.10-slim-bookworm
+
 
 # Set the working directory
 WORKDIR /src

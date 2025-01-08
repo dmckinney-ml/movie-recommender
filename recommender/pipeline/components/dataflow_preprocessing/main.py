@@ -21,7 +21,6 @@ def run():
                 query="""
                 SELECT movieId, title, genres
                 FROM `oolola.movie_data.movies`
-                WHERE movieId IN (1, 2, 3, 4, 5)
                 """,
                 use_standard_sql=True
             )
@@ -34,7 +33,6 @@ def run():
                 query="""
                 SELECT userId, movieId, rating, timestamp
                 FROM `oolola.movie_data.ratings`
-                WHERE movieId IN (1, 2, 3, 4, 5)
                 """,
                 use_standard_sql=True
             )

@@ -99,6 +99,7 @@ celerybeat-schedule
 *.env
 *.env.*
 .venv/
+.poetry/
 
 # Spyder project settings
 .spyderproject
@@ -125,7 +126,7 @@ dmypy.json
 *.json
 
 # Data files
-data/*.csv
+/data
 
 # Compiled files
 *.o
@@ -135,6 +136,7 @@ data/*.csv
 
 # Logs
 *.log
+/logs
 
 # Temporary files
 *.tmp

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Text
 import logging
-
+import faiss
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

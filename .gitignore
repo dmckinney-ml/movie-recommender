@@ -126,7 +126,7 @@ dmypy.json
 *.json
 
 # Data files
-/data
+/*data*
 
 # Compiled files
 *.o

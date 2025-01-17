@@ -1,5 +1,5 @@
-# Use a lightweight Python 3.7.3 image as the base
-FROM python:3.10-slim-bookworm
+# Use a lightweight Python 3.10 image as the base
+FROM python:3.10.16-slim-bookworm
 
 
 # Set the working directory

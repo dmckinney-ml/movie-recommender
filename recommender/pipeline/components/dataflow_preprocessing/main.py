@@ -27,18 +27,8 @@ def run():
             | "Map Movies to Key-Value Pairs" >> beam.Map(lambda row: (row['movieId'], row))
         )
 
-        ratings = (
-            p
-            | "Read Ratings Table" >> beam.io.ReadFromBigQuery(
-                query="""
-                SELECT userId, movieId, rating, timestamp
-                FROM `oolola.movie_data.ratings`
-                """,
-                use_standard_sql=True
-            )
-            | "Map Ratings to Key-Value Pairs" >> beam.Map(lambda row: (row['movieId'], row))
-        )
 
+        
         # Extract unique genres from the movies data
         unique_genres = [
             'Action',
@@ -48,6 +38,7 @@ def run():
             'Comedy',
             'Crime',
             'Drama',
+            'Documentary',
             'Fantasy',
             'Film-Noir',
             'Horror',
@@ -62,51 +53,37 @@ def run():
         ]
 
         # Perform data transformations
-        preprocessed_data = (
-            {'movies': movies, 'ratings': ratings}
-            | "Join Data" >> beam.CoGroupByKey()
-            | "Transform Data" >> beam.FlatMap(preprocess_data, unique_genres=unique_genres)  # Pass unique genres for encoding
+        preprocessed_genres = (
+            movies
+            | "Transform Data" >> beam.FlatMap(preprocess_for_genres, unique_genres=unique_genres)  # Pass unique genres for encoding
         )
 
         # Write the preprocessed data to BigQuery
-        preprocessed_data | "Write to BigQuery" >> beam.io.WriteToBigQuery(
-            table='oolola:movie_data.preprocessed_data',
-            schema=get_bq_schema(),  # Dynamically generate schema
+        preprocessed_genres | "Write Genres table to BigQuery" >> beam.io.WriteToBigQuery(
+            table='oolola:movie_data.genres',
+            schema=get_genres_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
         )
 
-# Update the preprocess_data function to dynamically accept genres
-def preprocess_data(element, unique_genres):
-    movie_id, grouped_data = element
-    movies = {movie['movieId']: movie for movie in grouped_data['movies']}
-    ratings = grouped_data['ratings']
+def preprocess_for_genres(element, unique_genres):
+    movie = element[1]  # Extract the movie dictionary
+    movie_id = movie['movieId']
+    title = movie['title']
+    genres = movie['genres'].split('|')
+    genre_vector = [1 if genre in genres else 0 for genre in unique_genres]
+    yield {
+        'movie_id': movie_id,
+        'title': title,
+        'genres': genre_vector,
+    }
 
-    for rating in ratings:
-        # Get the genres for the current movie
-        movie_genres = movies.get(rating['movieId'], {}).get('genres', '').split('|')
-
-        # Generate multi-hot encoding vector for the movie
-        genre_vector = [1 if genre in movie_genres else 0 for genre in unique_genres]
-
-        yield {
-            'userId': rating['userId'],
-            'movieId': rating['movieId'],
-            'title': movies.get(rating['movieId'], {}).get('title', None),
-            'genres': genre_vector,  # Use the multi-hot encoding for genres
-            'rating': rating['rating'],
-            'timestamp': rating['timestamp'],
-        }
-
-def get_bq_schema():
+def get_genres_schema():
     return {
         'fields': [
-            {'name': 'userId', 'type': 'INTEGER'},
-            {'name': 'movieId', 'type': 'INTEGER'},
+            {'name': 'movie_id', 'type': 'INTEGER'},
             {'name': 'title', 'type': 'STRING'},
             {'name': 'genres', 'type': 'INTEGER', 'mode': 'REPEATED'},
-            {'name': 'rating', 'type': 'FLOAT'},
-            {'name': 'timestamp', 'type': 'TIMESTAMP'},
         ]
     }
 

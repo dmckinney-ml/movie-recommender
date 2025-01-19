@@ -49,8 +49,14 @@ def run():
             | "Replace movieId with title" >> beam.FlatMap(replace_movie_id_with_title)
         )
 
-        # Write the transformed data to BigQuery
-        joined | "Write Ratings with Titles to BigQuery" >> beam.io.WriteToBigQuery(
+        # Filter movies where year is after 2020
+        filtered_movies = (
+            joined
+            | "Filter Joined Movies After 2020" >> beam.Filter(lambda row: row['year'] is not None and row['year'] > 2020)
+        )
+
+        # Write the filtered data to BigQuery
+        filtered_movies | "Write Ratings with Titles to BigQuery" >> beam.io.WriteToBigQuery(
             table='oolola:movie_data.ratings_with_titles',
             schema=get_ratings_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
@@ -84,6 +90,7 @@ def run():
         preprocessed_movies = (
             movies
             | "Transform Data" >> beam.FlatMap(preprocess_movies, unique_genres=unique_genres)  # Pass unique genres for encoding
+            | "Filter Movies After 2020" >> beam.Filter(lambda row: row['year'] is not None and row['year'] > 2020)
         )
 
         # Write the preprocessed data to BigQuery
@@ -135,6 +142,7 @@ def replace_movie_id_with_title(element):
         return
 
     title = movies[0]['title']
+    year = None
     match = re.search(r'\((\d{4})\)', title)
     if match:
         year = int(match.group(1))
@@ -143,8 +151,9 @@ def replace_movie_id_with_title(element):
     for rating in ratings:
         yield {
             'title': title,
+            'year': year,
             'rating': rating['rating'],
-            'userId': rating['userId'],
+            'user_id': rating['userId'],
             'timestamp': rating['timestamp']
         }
 
@@ -152,8 +161,9 @@ def get_ratings_schema():
     return {
         'fields': [
             {'name': 'title', 'type': 'STRING'},
+            {'name': 'year', 'type': 'INTEGER'},
             {'name': 'rating', 'type': 'FLOAT'},
-            {'name': 'userId', 'type': 'INTEGER'},
+            {'name': 'user_id', 'type': 'INTEGER'},
             {'name': 'timestamp', 'type': 'TIMESTAMP'},
         ]
     }

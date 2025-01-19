@@ -22,16 +22,16 @@ def pipeline(
     gcs_bucket_name: str = 'movie-data-1',
 ):
     # # Load the preprocessing component from the YAML file
-    # preprocessing_op = comp.load_component_from_file(PREPROCESSING_YAML)
+    preprocessing_op = comp.load_component_from_file(PREPROCESSING_YAML)
     
-    # # Invoke the operation and pass necessary parameters
-    # preprocessing_task = preprocessing_op(
-    #     bucket=gcs_bucket_name
-    # )
+    # Invoke the operation and pass necessary parameters
+    preprocessing_task = preprocessing_op(
+        bucket=gcs_bucket_name
+    )
 
     # Load the training component from the YAML file
-    training_op = comp.load_component_from_file(TRAINING_YAML)
-    training_task = training_op()
+    # training_op = comp.load_component_from_file(TRAINING_YAML)
+    # training_task = training_op()
 
     # training_task.after(preprocessing_task)
 

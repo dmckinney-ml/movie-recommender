@@ -604,6 +604,45 @@ files = [
 ]
 
 [[package]]
+name = "keras-tuner"
+version = "1.4.7"
+description = "A Hyperparameter Tuning Library for Keras"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "python_version <= \"3.11\" or python_version >= \"3.12\""
+files = [
+    {file = "keras-tuner-1.4.7.tar.gz", hash = "sha256:6befd25ee81476e6207d8ca7ed7dc674b8194437cfa0b127294cd00da905ff22"},
+    {file = "keras_tuner-1.4.7-py3-none-any.whl", hash = "sha256:0bcf0220eccc74e7a6a9bd7c8e58531a1af8515019e6bc2dc495833155c07fe2"},
+]
+
+[package.dependencies]
+keras = "*"
+kt-legacy = "*"
+packaging = "*"
+requests = "*"
+
+[package.extras]
+bayesian = ["scikit-learn", "scipy"]
+build = ["build", "namex", "tensorflow-cpu"]
+tensorflow = ["tensorflow (>=2.0)"]
+tensorflow-cpu = ["tensorflow-cpu (>=2.0)"]
+tests = ["black", "flake8", "ipython", "isort", "namex", "pandas", "portpicker", "pytest", "pytest-cov", "pytest-xdist", "scikit-learn", "scipy"]
+
+[[package]]
+name = "kt-legacy"
+version = "1.0.5"
+description = "Legacy import names for Keras Tuner"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "python_version <= \"3.11\" or python_version >= \"3.12\""
+files = [
+    {file = "kt-legacy-1.0.5.tar.gz", hash = "sha256:dbbade58f12c6a6da6062f4b045a6395a8d4195815e3e064bc3e609b69c8a26c"},
+    {file = "kt_legacy-1.0.5-py3-none-any.whl", hash = "sha256:8d5c5b3dccf348367fe9ca5b006e7ad2d1babcce62976cfc199e831ea699dcd3"},
+]
+
+[[package]]
 name = "libclang"
 version = "18.1.1"
 description = "Clang Python Bindings, mirrored from the official LLVM repo: https://github.com/llvm/llvm-project/tree/main/clang/bindings/python, to make the installation process easier."
@@ -1522,4 +1561,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<=3.12.2"
-content-hash = "c50fb36f1e56f294f022747fe83fa7845f41121fc3d406754fac179435d09a31"
+content-hash = "b458f4e34fd66ae5707910d5e0a944a8536b973930738c550967f13fd84069e9"

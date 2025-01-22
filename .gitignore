@@ -129,6 +129,7 @@ dmypy.json
 # Data files
 /*data*
 /trained_model
+/tuning
 
 # Compiled files
 *.o

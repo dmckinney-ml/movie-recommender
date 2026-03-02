@@ -3,7 +3,6 @@ import kfp.compiler as compiler
 import kfp.components as comp
 import kfp.dsl as dsl
 import google.cloud.aiplatform as aip
-from google_cloud_pipeline_components.v1.custom_job import create_custom_training_job_from_component
 
 # Set the path to the components and the compiled pipeline tar file
 HERE = path.abspath(path.dirname(__file__))
@@ -30,10 +29,10 @@ def pipeline(
     )
 
     # Load the training component from the YAML file
-    # training_op = comp.load_component_from_file(TRAINING_YAML)
-    # training_task = training_op()
+    training_op = comp.load_component_from_file(TRAINING_YAML)
+    training_task = training_op()
 
-    # training_task.after(preprocessing_task)
+    training_task.after(preprocessing_task)
 
 # Compile the pipeline into a .yaml file
 if __name__ == '__main__':

@@ -350,11 +350,13 @@ After retrieving candidates via FAISS, the XGBoost model re-ranks them using `ra
 
 ### FAISS Index
 
-After training, movie embeddings are extracted in batches (`batch_size=512`) and indexed into a FAISS `IndexFlatL2` for exact nearest-neighbor search. Embeddings are cast to `float32` C-contiguous arrays before indexing (required by FAISS). At inference:
+After training, movie embeddings are extracted in batches (`batch_size=512`) and indexed into a FAISS `IndexFlatIP` (inner product) index for exact nearest-neighbor search. Embeddings are cast to `float32` C-contiguous arrays before indexing (required by FAISS). At inference:
 
 1. The user embedding is computed by the user tower (cast to `float32`).
-2. FAISS returns the top-K closest movie embeddings.
+2. FAISS returns the top-K movies with the highest dot-product similarity to the user embedding.
 3. Candidate movies are re-ranked by the XGBoost model.
+
+**Why `IndexFlatIP` instead of `IndexFlatL2`?** TFRS's `Retrieval` task trains the towers by maximising **dot-product similarity** between matched (user, movie) pairs. Querying FAISS with `IndexFlatIP` keeps the retrieval metric consistent with the training objective. `IndexFlatL2` (Euclidean distance) diverges from dot product when embedding magnitudes vary — which they do here, since the towers use no L2 normalisation — and would silently retrieve suboptimal candidates.
 
 ---
 
@@ -441,4 +443,4 @@ Contributions are welcome! Please:
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.

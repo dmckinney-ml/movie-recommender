@@ -8,7 +8,7 @@ timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
 options = PipelineOptions(save_main_session=True)
 google_cloud_options = options.view_as(GoogleCloudOptions)
 options.view_as(StandardOptions).runner = 'DataflowRunner'
-google_cloud_options.project = 'oolola'  # Replace with your project ID
+google_cloud_options.project = 'my-project'  # Replace with your project ID
 google_cloud_options.region = 'us-central1'  # Set your region
 google_cloud_options.job_name = 'dataflow-movie-preprocessing-{}'.format(timestamp)
 google_cloud_options.staging_location = 'gs://movie-data-1/staging'  # Your GCS staging bucket
@@ -23,7 +23,7 @@ def run():
             | "Read Movies Table" >> beam.io.ReadFromBigQuery(
                 query="""
                 SELECT movieId, title, genres
-                FROM `oolola.movie_data.movies`
+                FROM `my-project.movie_data.movies`
                 """,
                 use_standard_sql=True
             )
@@ -35,7 +35,7 @@ def run():
             | "Read Ratings Table" >> beam.io.ReadFromBigQuery(
                 query="""
                 SELECT movieId, rating, userId, timestamp
-                FROM `oolola.movie_data.ratings`
+                FROM `my-project.movie_data.ratings`
                 """,
                 use_standard_sql=True
             )
@@ -57,7 +57,7 @@ def run():
 
         # Write the filtered data to BigQuery
         filtered_movies | "Write Ratings with Titles to BigQuery" >> beam.io.WriteToBigQuery(
-            table='oolola:movie_data.ratings_with_titles',
+            table='my-project:movie_data.ratings_with_titles',
             schema=get_ratings_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
@@ -95,7 +95,7 @@ def run():
 
         # Write the preprocessed data to BigQuery
         preprocessed_movies | "Write preprocessed movie table to BigQuery" >> beam.io.WriteToBigQuery(
-            table='oolola:movie_data.preprocessed_movies',
+            table='my-project:movie_data.preprocessed_movies',
             schema=get_movies_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,

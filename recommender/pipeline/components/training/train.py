@@ -71,9 +71,11 @@ def train():
             "rating": x["rating"]
         }, num_parallel_calls=tf.data.AUTOTUNE)
 
-        # Shuffle and split the data into training and testing sets
+        # User-stratified train/test split — pass ratings_bq so the split is by
+        # user_id rather than by row, preventing embedding-level data leakage.
+        # train_combined is also returned for XGBoost feature extraction.
         logger.info("Shuffling and splitting the data...")
-        trainds, testds = create_tf_dataset(combined_dataset)
+        trainds, testds, train_combined, train_ratings_bq = create_tf_dataset(ratings_bq, combine_datasets)
 
         # Batch the data
         logger.info("Batching the data...")
@@ -98,21 +100,27 @@ def train():
             filepath=f"trained_model/tpe/checkpoints/{timestamp}_cp.ckpt",
             save_best_only=True,
             save_weights_only=True,
-            monitor='factorized_top_k/top_5_categorical_accuracy',
+            monitor='val_factorized_top_k/top_5_categorical_accuracy',
             mode='max'
         )
         tensorboard_callback = tf.keras.callbacks.TensorBoard(f"trained_model/tpe/tensorboard/{timestamp}_cp.ckpt", histogram_freq=1)
-        early_stopping_callback = tf.keras.callbacks.EarlyStopping(
-            monitor='factorized_top_k/top_10_categorical_accuracy',
-            patience=2,
-            restore_best_weights=True
-)
-        train_hypermodel(tuned_model, trainds, testds, 12, callbacks=[checkpoint_callback, tensorboard_callback, early_stopping_callback])
+        train_hypermodel(tuned_model, trainds, testds, 12, callbacks=[checkpoint_callback, tensorboard_callback])
 
-        # Extract user and movie embeddings
+        # Extract user and movie embeddings — batched to avoid OOM on large catalogues
         logger.info("Extracting user and movie embeddings...")
-        user_embeddings = tuned_model.user_model.predict(unique_user_ids)
-        movie_embeddings = tuned_model.movie_model.predict(unique_titles)
+        batch_size = 512
+
+        titles_arr = np.array(unique_titles)
+        movie_embeddings = np.vstack([
+            tuned_model.movie_model(tf.constant(titles_arr[i:i+batch_size], dtype=tf.string)).numpy()
+            for i in range(0, len(titles_arr), batch_size)
+        ]).astype(np.float32)
+
+        user_ids_arr = np.array(unique_user_ids)
+        user_embeddings = np.vstack([
+            tuned_model.user_model(tf.constant(user_ids_arr[i:i+batch_size], dtype=tf.int32)).numpy()
+            for i in range(0, len(user_ids_arr), batch_size)
+        ]).astype(np.float32)
 
         # Create a dictionary to map user IDs and movie IDs to their embeddings
         user_embedding_dict = {user_id: embedding for user_id, embedding in zip(unique_user_ids, user_embeddings)}
@@ -136,8 +144,10 @@ def train():
             return np.concatenate([user_embedding, movie_embedding, genres])
 
         # Convert combined dataset to DataFrame
-        logger.info("Converting combined dataset to DataFrame...")
-        xgb_df = pd.DataFrame(combined_dataset.as_numpy_iterator())
+        # Use the TRAINING partition only — building XGBoost features from the
+        # full dataset would leak held-out interactions into XGBoost training.
+        logger.info("Converting training dataset to DataFrame for XGBoost...")
+        xgb_df = pd.DataFrame(train_combined.as_numpy_iterator())
 
         # Apply the function to create feature vectors
         try:
@@ -149,11 +159,11 @@ def train():
 
         # Create the DMatrix for XGBoost
         logger.info("Creating DMatrix for XGBoost...")
-        dtrain, dval, y_val = create_xgb_data(xgb_df)
+        dtrain, dval, val_df = create_xgb_data(xgb_df)
 
         # Tune and train the XGBoost model
         logger.info("Tuning and training the XGBoost model...")
-        best_xgb_params = tune_xgb_model(dtrain, dval, y_val)
+        best_xgb_params = tune_xgb_model(dtrain, dval, val_df)
         bst = train_xgb_model(dtrain, dval, best_xgb_params, timestamp)
 
     except Exception as e:

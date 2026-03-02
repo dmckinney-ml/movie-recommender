@@ -1,5 +1,3 @@
-from pandas import DataFrame
-from sklearn.model_selection import train_test_split
 import numpy as np
 import xgboost as xgb
 from google.cloud import bigquery
@@ -11,7 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Define the BigQuery table and project details
-PROJECT_ID = 'oolola'
+# Replace these with your actual project and dataset details
+PROJECT_ID = 'my-project'
 DATASET_ID = 'movie_data'
 TABLE_ID = 'preprocessed_data'
 
@@ -46,103 +45,121 @@ def load_ratings_bq():
         raise
 
 # Function to create a TensorFlow dataset
-def create_tf_dataset(combined_dataset: tf.data.Dataset):
+def create_tf_dataset(ratings_bq, combine_datasets_fn):
+    """Build user-stratified train/test TF datasets from a ratings DataFrame.
+
+    Splits by user_id (not by row) so no user's interactions straddle both
+    partitions, preventing embedding-level data leakage. Also returns the
+    unbatched training dataset so XGBoost features can be built from it.
+
+    Returns:
+        trainds:          Batched, shuffled training dataset.
+        testds:           Batched test dataset.
+        train_combined:   Unbatched training dataset (for XGBoost feature extraction).
+        train_ratings_bq: Training partition DataFrame (for XGBoost user splits).
+    """
     try:
         tf.random.set_seed(42)
+        np.random.seed(42)
 
-        # Shuffle the dataset with a large buffer size
-        # Ensure the buffer size is large enough to cover randomness but not too large to exhaust memory
-        shuffle_buffer_size = 200000  # Smaller buffer size for faster shuffling
-        logger.info(f"Shuffling the dataset with buffer size {shuffle_buffer_size}...")
-        shuffled = combined_dataset.shuffle(buffer_size=shuffle_buffer_size, seed=42, reshuffle_each_iteration=True)
+        # ── User-stratified split ─────────────────────────────────────────────
+        all_user_ids = np.unique(ratings_bq['user_id'].values)
+        np.random.shuffle(all_user_ids)
+        split_idx = int(len(all_user_ids) * 0.8)
 
-        # Calculate relative proportions for splitting
-        train_ratio = 0.8
+        train_user_ids = set(all_user_ids[:split_idx].tolist())
+        test_user_ids  = set(all_user_ids[split_idx:].tolist())
 
-        ds_length = int(tf.data.experimental.cardinality(shuffled).numpy())
-        logger.info(f"Length of the dataset: {ds_length}")
+        assert not (train_user_ids & test_user_ids), "User leakage detected between train and test sets!"
 
-        # Define the split function for large datasets
-        def split_dataset(dataset, train_ratio):
-            # Determine split points
-            trainds = dataset.take(int(train_ratio * ds_length))
-            testds = dataset.skip(int(train_ratio * ds_length))
+        train_ratings_bq = ratings_bq[ratings_bq['user_id'].isin(train_user_ids)]
+        test_ratings_bq  = ratings_bq[ratings_bq['user_id'].isin(test_user_ids)]
 
-            return trainds, testds
+        logger.info(f"Train users: {len(train_user_ids)} ({len(train_ratings_bq)} interactions)")
+        logger.info(f"Test  users: {len(test_user_ids)} ({len(test_ratings_bq)} interactions)")
 
-        # Perform the split
-        logger.info("Splitting the dataset into training and testing sets...")
-        trainds, testds = split_dataset(shuffled, train_ratio)
+        def build_ds(ratings_df):
+            d = {k: list(v) for k, v in ratings_df[['title', 'user_id', 'rating']].to_dict(orient='list').items()}
+            ds = tf.data.Dataset.from_tensor_slices(d)
+            ds = ds.map(lambda x: {"title": x["title"], "user_id": x["user_id"], "rating": x["rating"]})
+            ds = ds.map(combine_datasets_fn)
+            ds = ds.map(
+                lambda x: {"title": x["title"], "user_id": x["user_id"], "genres": x["genres"], "rating": x["rating"]},
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+            return ds
 
-        # Optimize performance with prefetching
-        train_batch_size = 128
-        test_batch_size = 64
+        train_combined = build_ds(train_ratings_bq)
+        test_combined  = build_ds(test_ratings_bq)
 
-        # Optimize datasets with batching, caching, and prefetching
-        logger.info(f"Batching the datasets with train batch size {train_batch_size} and test batch size {test_batch_size}...")
-        trainds = trainds.batch(train_batch_size).cache().prefetch(tf.data.AUTOTUNE)
-        testds = testds.batch(test_batch_size).cache().prefetch(tf.data.AUTOTUNE)
-        return trainds, testds
+        # NOTE: .cache() is intentionally omitted. On memory-constrained machines
+        # caching accumulates RAM across Hyperband trials and can kill the process.
+        logger.info("Batching training (128) and test (64) datasets...")
+        trainds = train_combined.shuffle(100_000, seed=42).batch(128).prefetch(tf.data.AUTOTUNE)
+        testds  = test_combined.batch(64).prefetch(tf.data.AUTOTUNE)
+
+        return trainds, testds, train_combined, train_ratings_bq
+
     except Exception as e:
         logger.error(f"Error creating TensorFlow dataset: {e}")
         raise
 
-def create_xgb_data(xgb_df: DataFrame):
+def create_xgb_data(xgb_df):
+    """Build XGBoost DMatrices using a user-stratified cold-start split.
+
+    Splits by user_id so that validation users are entirely unseen during
+    XGBoost training, mirroring the neural-net split discipline.
+
+    Returns:
+        dtrain: XGBoost DMatrix for training.
+        dval:   XGBoost DMatrix for validation.
+        val_df: Validation DataFrame (for per-user NDCG in tune_xgb_model).
+    """
     try:
-        # Set the seed for reproducibility
-        random_seed = 42
+        np.random.seed(42)
 
-        # Shuffle the DataFrame
-        logger.info("Shuffling the DataFrame...")
-        shuffled_df = xgb_df.sample(frac=1, random_state=random_seed).reset_index(drop=True)
-        train_df, val_df = train_test_split(shuffled_df, test_size=0.2, random_state=random_seed)
+        # ── User-stratified XGBoost split ─────────────────────────────────────
+        xgb_all_user_ids = xgb_df['user_id'].unique()
+        np.random.shuffle(xgb_all_user_ids)
+        split_idx      = int(len(xgb_all_user_ids) * 0.8)
+        xgb_train_users = set(xgb_all_user_ids[:split_idx].tolist())
+        xgb_val_users   = set(xgb_all_user_ids[split_idx:].tolist())
 
-        # Identify overlapping rows
-        common_rows = train_df[['user_id', 'title']].merge(val_df[['user_id', 'title']], how='inner')
+        assert not (xgb_train_users & xgb_val_users), "XGB user leakage detected!"
 
-        # Remove overlapping rows from the validation set
-        if not common_rows.empty:
-            val_df = val_df[~val_df[['user_id', 'title']].apply(tuple, axis=1).isin(common_rows.apply(tuple, axis=1))]
-            logger.info(f"{len(common_rows)} overlapping rows removed from the validation set.")
+        train_df = xgb_df[xgb_df['user_id'].isin(xgb_train_users)].copy()
+        val_df   = xgb_df[xgb_df['user_id'].isin(xgb_val_users)].copy()
 
-        assert train_df[['user_id', 'title']].merge(val_df[['user_id', 'title']], how='inner').empty, "Data leakage detected!"
+        logger.info(f"XGB train users: {len(xgb_train_users)} ({len(train_df)} interactions)")
+        logger.info(f"XGB val   users: {len(xgb_val_users)} ({len(val_df)} interactions)")
 
-        # Create feature and label arrays
-        logger.info("Creating feature and label arrays...")
         X_train = np.vstack(train_df['features'].values)
         y_train = train_df['rating'].values
-        X_val = np.vstack(val_df['features'].values)
-        y_val = val_df['rating'].values
+        X_val   = np.vstack(val_df['features'].values)
 
-        # Add content-based features to the feature matrix
-        logger.info("Adding content-based features to the feature matrix...")
-        additional_train_features = train_df.drop(columns=['user_id', 'title', 'rating', 'genres', 'features']).values
-        additional_val_features = val_df.drop(columns=['user_id', 'title', 'rating', 'genres', 'features']).values
+        # Only hstack additional features if they actually exist
+        remaining_cols = [c for c in train_df.columns if c not in ['user_id', 'title', 'rating', 'genres', 'features']]
+        if remaining_cols:
+            X_train = np.hstack([X_train, train_df[remaining_cols].values])
+            X_val   = np.hstack([X_val,   val_df[remaining_cols].values])
 
-        # Concatenate the additional features
-        X_train = np.hstack([X_train, additional_train_features])
-        X_val = np.hstack([X_val, additional_val_features])
-
-        # Verify the shapes of the feature matrices
         logger.info(f"Shape of X_train: {X_train.shape}")
         logger.info(f"Shape of X_val: {X_val.shape}")
 
-        # Group sizes for ranking
         group_train = train_df.groupby('user_id').size().to_list()
-        group_val = val_df.groupby('user_id').size().to_list()
+        group_val   = val_df.groupby('user_id').size().to_list()
 
-        # Verify that the sum of group sizes matches the number of rows
-        assert sum(group_train) == X_train.shape[0], "Mismatch between group sizes and number of rows in X_train"
-        assert sum(group_val) == X_val.shape[0], "Mismatch between group sizes and number of rows in X_val"
+        assert sum(group_train) == X_train.shape[0], "Mismatch between group sizes and rows in X_train"
+        assert sum(group_val)   == X_val.shape[0],   "Mismatch between group sizes and rows in X_val"
 
-        # Create DMatrix for XGBoost
         logger.info("Creating DMatrix for XGBoost...")
         dtrain = xgb.DMatrix(X_train, label=y_train)
         dtrain.set_group(group_train)
-        dval = xgb.DMatrix(X_val, label=y_val)
+        dval = xgb.DMatrix(X_val, label=val_df['rating'].values)
         dval.set_group(group_val)
 
-        return dtrain, dval, y_val
+        return dtrain, dval, val_df
+
     except Exception as e:
         logger.error(f"Error creating XGBoost data: {e}")
         raise

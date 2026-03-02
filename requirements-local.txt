@@ -1,0 +1,89 @@
+# Local (macOS, Apple Silicon M-series)
+# Install: pip install -r requirements-local.txt
+#
+# Notes:
+#   - tensorflow-metal enables GPU acceleration via Metal on M-series Macs
+#     Check version compatibility at: https://developer.apple.com/metal/tensorflow-plugin/
+#   - tensorflow-cpu-aws / tensorflow-intel excluded (not applicable on macOS)
+#   - Use tf.keras.optimizers.legacy.Adam in the notebook (not plain Adam) on M-series
+#   - directory= in Hyperband should use a local path (e.g. tuning/tpe), not gs://
+
+absl-py==2.4.0
+alembic==1.18.4
+astunparse==1.6.3
+certifi==2026.2.25
+cffi==2.0.0
+charset-normalizer==3.4.4
+colorlog==6.10.1
+cryptography==46.0.5
+db-dtypes==1.5.0
+faiss-cpu==1.13.2
+flatbuffers==25.12.19
+gast==0.7.0
+google-api-core==2.30.0
+google-auth-oauthlib==1.3.0
+google-auth==2.48.0
+google-cloud-bigquery==3.14.0
+google-cloud-core==2.5.0
+google-crc32c==1.8.0
+google-pasta==0.2.0
+google-resumable-media==2.8.0
+googleapis-common-protos==1.72.0
+greenlet==3.3.2
+grpcio==1.78.0
+h5py==3.15.1
+idna==3.11
+ipykernel
+joblib==1.5.3
+jupyter
+keras-tuner[bayesian]==1.4.8
+keras==2.15.0
+kt-legacy==1.0.5
+libclang==18.1.1
+mako==1.3.10
+markdown==3.10.2
+markupsafe==3.0.3
+ml-dtypes==0.3.2
+notebook
+numpy==1.26.4
+oauthlib==3.3.1
+opt-einsum==3.4.0
+optuna==4.7.0
+packaging==26.0
+pandas==2.3.3
+proto-plus==1.27.1
+protobuf==4.25.8
+pyarrow==23.0.1
+pyasn1-modules==0.4.2
+pyasn1==0.6.2
+pycparser==3.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+pyyaml==6.0.3
+requests-oauthlib==2.0.0
+requests==2.32.5
+rsa==4.9.1
+scikit-learn==1.7.2
+scipy==1.15.3
+setuptools==82.0.0
+six==1.17.0
+sqlalchemy==2.0.47
+tensorboard-data-server==0.7.2
+tensorboard==2.15.2
+tensorflow==2.15.1
+tensorflow-estimator==2.15.0
+tensorflow-io-gcs-filesystem==0.37.1
+tensorflow-metal
+tensorflow-ranking==0.5.5
+tensorflow-serving-api==2.15.1
+tensorflow-recommenders==0.7.3
+termcolor==3.3.0
+threadpoolctl==3.6.0
+tqdm==4.67.3
+typing-extensions==4.15.0
+tzdata==2025.3
+urllib3==2.6.3
+werkzeug==3.1.6
+wheel==0.46.3
+wrapt==1.14.2
+xgboost==1.7.6

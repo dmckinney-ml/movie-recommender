@@ -4,7 +4,8 @@ description: A component to train a movie recommendation model.
 implementation:
   container:
     # Use your custom Docker image built from the Dockerfile
-    image: us-central1-docker.pkg.dev/oolola/oolola-repo/moviedata-training:latest # Replace this with the actual image URI from Artifact Registry
+
+    image: us-central1-docker.pkg.dev/my-project/movie-data-repo/moviedata-training:latest # Replace this with the actual image URI from Artifact Registry
     command:
-    - python3
-    - /src/main.py  # Adjust this if the script name/location differs in the container
+      - python3
+      - /src/main.py # Adjust this if the script name/location differs in the container

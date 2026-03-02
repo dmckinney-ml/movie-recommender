@@ -38,9 +38,10 @@ def pipeline(
 # Compile the pipeline into a .yaml file
 if __name__ == '__main__':
     # Compile the pipeline
+    # Replace 'my-project' with your actual GCP project ID in the compiled pipeline YAML if needed
     compiler.Compiler().compile(pipeline, PIPELINE_YAML, type_check=False)
     aip.init(
-        project='oolola',
+        project='my-project',
         location='us-central1',
     )
 
@@ -54,5 +55,5 @@ if __name__ == '__main__':
         },
         enable_caching=False
     )
-
-    job.submit(service_account='pipeline-svc-acct@oolola.iam.gserviceaccount.com')
+    # Replace with your pipeline's service account email
+    job.submit(service_account='pipeline-svc-acct@my-project.iam.gserviceaccount.com')

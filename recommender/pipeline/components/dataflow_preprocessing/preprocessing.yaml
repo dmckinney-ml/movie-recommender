@@ -1,18 +1,19 @@
 name: DataflowPreprocessing
 description: A component to preprocess data using Google Cloud Dataflow.
 inputs:
-- name: bucket
-  type: String
-  description: The GCS bucket to use for staging and temp files.
+  - name: bucket
+    type: String
+    description: The GCS bucket to use for staging and temp files.
 
 implementation:
   container:
     # Use your custom Docker image built from the Dockerfile
-    image: us-central1-docker.pkg.dev/oolola/oolola-repo/moviedata-dataflow_preprocessing:latest # Replace this with the actual image URI from Artifact Registry
+
+    image: us-central1-docker.pkg.dev/my-project/movie-data-repo/moviedata-dataflow_preprocessing:latest # Replace this with the actual image URI from Artifact Registry
     command:
-    - python3
-    - /src/main.py  # Adjust this if the script name/location differs in the container
+      - python3
+      - /src/main.py # Adjust this if the script name/location differs in the container
     args:
-    - --staging_location=gs://{{inputs.bucket}}/staging
-    - --temp_location=gs://{{inputs.bucket}}/temp
-    - --output=gs://{{inputs.bucket}}/preprocessed_data
+      - --staging_location=gs://{{inputs.bucket}}/staging
+      - --temp_location=gs://{{inputs.bucket}}/temp
+      - --output=gs://{{inputs.bucket}}/preprocessed_data

@@ -15,7 +15,7 @@ fi
 BUCKET_NAME=${BUCKET_NAME:-movie-data-1} # Change this to your bucket name or customize it
 # Artifact Registry region and repository name
 ARTIFACT_REGISTRY_REGION=${ARTIFACT_REGISTRY_REGION:-us-central1} # Default to us-central1 if not set
-REPOSITORY_NAME=${REPOSITORY_NAME:-oolola-repo} # Change this to your repository name or customize it
+REPOSITORY_NAME=${REPOSITORY_NAME:-movie-data-repo} # Change this to your repository name or customize it
 
 # Docker image details
 IMAGE_NAME=${IMAGE_NAME:-moviedata-$COMPONENT_NAME}

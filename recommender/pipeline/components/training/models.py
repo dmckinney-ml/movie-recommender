@@ -1,3 +1,5 @@
+import platform
+
 import tensorflow_recommenders as tfrs
 from typing import Dict, Text
 import tensorflow as tf
@@ -42,7 +44,7 @@ class RecommendationModel(tfrs.Model):
                 + self.retrieval_weight * retrieval_loss)
 
 class RecommendationHyperModel(HyperModel):
-    def __init__(self, unique_user_ids, unique_titles, num_genres, rating_weight=1.0, retrieval_weight=1.0):
+    def __init__(self, unique_user_ids, unique_titles, num_genres, rating_weight=2.0, retrieval_weight=0.5):
         self.unique_user_ids = unique_user_ids
         self.unique_titles = unique_titles
         self.num_genres = num_genres
@@ -51,6 +53,10 @@ class RecommendationHyperModel(HyperModel):
 
     def build(self, hp):
         embedding_dimension = hp.Int('embedding_dimension', min_value=32, max_value=256, step=32)
+
+        # L2 regularisation applied to all embedding and dense layers
+        l2_reg = hp.Float('l2_reg', min_value=1e-5, max_value=1e-2, sampling='log')
+
         user_input = tf.keras.layers.Input(shape=(), dtype=tf.int32, name='user_id')
         movie_input = tf.keras.layers.Input(shape=(), dtype=tf.string, name='title')
         genre_input = tf.keras.layers.Input(shape=(self.num_genres,), dtype=tf.float32, name='genres')
@@ -58,16 +64,38 @@ class RecommendationHyperModel(HyperModel):
         user_lookup = tf.keras.layers.IntegerLookup(vocabulary=self.unique_user_ids, mask_token=None)
         movie_lookup = tf.keras.layers.StringLookup(vocabulary=self.unique_titles, mask_token=None)
 
-        user_embedding = tf.keras.layers.Embedding(len(self.unique_user_ids) + 1, embedding_dimension)(user_lookup(user_input))
-        movie_embedding = tf.keras.layers.Embedding(len(self.unique_titles) + 1, embedding_dimension)(movie_lookup(movie_input))
-        genre_embedding = tf.keras.layers.Dense(embedding_dimension)(genre_input)
+        user_embedding = tf.keras.layers.Embedding(
+            len(self.unique_user_ids) + 1,
+            embedding_dimension,
+            embeddings_regularizer=tf.keras.regularizers.l2(l2_reg)
+        )(user_lookup(user_input))
+        movie_embedding = tf.keras.layers.Embedding(
+            len(self.unique_titles) + 1,
+            embedding_dimension,
+            embeddings_regularizer=tf.keras.regularizers.l2(l2_reg)
+        )(movie_lookup(movie_input))
+        genre_embedding = tf.keras.layers.Dense(
+            embedding_dimension,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_reg)
+        )(genre_input)
 
         concatenated_embeddings = tf.concat([user_embedding, movie_embedding, genre_embedding], axis=1)
 
-        dense_1 = tf.keras.layers.Dense(hp.Int('units_1', min_value=128, max_value=512, step=64), activation="relu")(concatenated_embeddings)
-        dropout_1 = tf.keras.layers.Dropout(hp.Float('dropout_1', min_value=0.1, max_value=0.5, step=0.1))(dense_1)
-        dense_2 = tf.keras.layers.Dense(hp.Int('units_2', min_value=64, max_value=256, step=32), activation="relu")(dropout_1)
-        dropout_2 = tf.keras.layers.Dropout(hp.Float('dropout_2', min_value=0.1, max_value=0.5, step=0.1))(dense_2)
+        dense_1 = tf.keras.layers.Dense(
+            hp.Int('units_1', min_value=128, max_value=512, step=64),
+            activation="relu",
+            kernel_regularizer=tf.keras.regularizers.l2(l2_reg)
+        )(concatenated_embeddings)
+        dense_1 = tf.keras.layers.BatchNormalization()(dense_1)
+        dropout_1 = tf.keras.layers.Dropout(hp.Float('dropout_1', min_value=0.3, max_value=0.6, step=0.1))(dense_1)
+
+        dense_2 = tf.keras.layers.Dense(
+            hp.Int('units_2', min_value=64, max_value=256, step=32),
+            activation="relu",
+            kernel_regularizer=tf.keras.regularizers.l2(l2_reg)
+        )(dropout_1)
+        dense_2 = tf.keras.layers.BatchNormalization()(dense_2)
+        dropout_2 = tf.keras.layers.Dropout(hp.Float('dropout_2', min_value=0.3, max_value=0.6, step=0.1))(dense_2)
         rating_output = tf.keras.layers.Dense(1)(dropout_2)
 
         user_model = tf.keras.Model(inputs=user_input, outputs=user_embedding)
@@ -83,10 +111,11 @@ class RecommendationHyperModel(HyperModel):
             metrics=[tf.keras.metrics.RootMeanSquaredError()],
         )
         retrieval_task = tfrs.tasks.Retrieval(
-            metrics=metrics
+            metrics=metrics,
+            temperature=0.1
         )
         model = RecommendationModel(user_model, movie_model, genre_model, rating_model, rating_task, retrieval_task, self.rating_weight, self.retrieval_weight)
-        
+
         # Define the learning rate schedule
         lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=hp.Float('learning_rate', min_value=1e-4, max_value=1e-2, sampling='log'),
@@ -95,8 +124,14 @@ class RecommendationHyperModel(HyperModel):
             staircase=True
         )
 
-        # Use the learning rate schedule in the optimizer
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule))
+        # Use legacy Adam on Apple Silicon (Metal backend), standard Adam on Linux/GCP.
+        # tf.keras.optimizers.legacy is not available on Linux.
+        if platform.system() == 'Darwin':
+            optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=lr_schedule)
+        else:
+            optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
+
+        model.compile(optimizer=optimizer)
         return model
 
 def create_hypermodel_tuner(unique_user_ids, unique_titles, unique_genres, timestamp):
@@ -104,10 +139,10 @@ def create_hypermodel_tuner(unique_user_ids, unique_titles, unique_genres, times
         logger.info("Creating Hyperband tuner...")
         tuner = Hyperband(
             RecommendationHyperModel(unique_user_ids, unique_titles, len(unique_genres)),
-            objective=Objective("val_factorized_top_k/top_5_categorical_accuracy", direction="max"),
+            objective=Objective("val_root_mean_squared_error", direction="min"),
             max_epochs=12,
             factor=3,
-            directory=f'{OUTPUT_DIR}/tuning/tpe',
+            directory='gs://movie-data-1/tuning',
             project_name=f'{timestamp}/movie_recommendation',
         )
         return tuner
@@ -115,7 +150,7 @@ def create_hypermodel_tuner(unique_user_ids, unique_titles, unique_genres, times
         logger.error(f"Error creating Hyperband tuner: {e}")
         raise
 
-def tune_hypermodel(tuner: Hyperband, train_ds, val_ds, epochs, callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)]):
+def tune_hypermodel(tuner: Hyperband, train_ds, val_ds, epochs, callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_root_mean_squared_error', patience=3, mode='min')]):
     try:
         logger.info("Tuning hypermodel...")
         tuner.search(train_ds, validation_data=val_ds, epochs=epochs, callbacks=callbacks)
@@ -150,10 +185,18 @@ def reload_hypermodel(tuner: Hyperband):
         logger.error(f"Error reloading hypermodel: {e}")
         raise
 
-def tune_xgb_model(dtrain, dval, y_val):
+def tune_xgb_model(dtrain, dval, val_df):
+    """Tune XGBoost hyperparameters with Optuna.
+
+    Args:
+        dtrain: XGBoost DMatrix for training data.
+        dval:   XGBoost DMatrix for validation data.
+        val_df: Validation DataFrame with columns ['user_id', 'rating'] aligned
+                to the rows of dval — used for per-user NDCG computation.
+    """
     try:
         logger.info("Tuning XGBoost model with Optuna...")
-        # Define the objective function for Optuna
+
         def objective(trial):
             param = {
                 'objective': 'rank:pairwise',
@@ -166,24 +209,30 @@ def tune_xgb_model(dtrain, dval, y_val):
                 'gamma': trial.suggest_float('gamma', 0.0, 0.5),
                 'lambda': trial.suggest_float('lambda', 0.0, 1.0),
             }
-            
-            bst = xgb.train(param, dtrain, num_boost_round=100, evals=[(dval, 'eval')], early_stopping_rounds=10, verbose_eval=True)
-            y_pred = bst.predict(dval)
-            min_rating = 0.5
-            max_rating = 5.0
-            min_pred = np.min(y_pred)
-            max_pred = np.max(y_pred)
-            y_pred_scaled = min_rating + (y_pred - min_pred) * (max_rating - min_rating) / (max_pred - min_pred)
-            
-            # Calculate NDCG score
-            ndcg = ndcg_score([y_val], [y_pred_scaled])
-            return ndcg
 
-        # Create a study and optimize the objective function
+            bst = xgb.train(param, dtrain, num_boost_round=300, evals=[(dval, 'eval')],
+                            early_stopping_rounds=20, verbose_eval=False)
+            y_pred = bst.predict(dval)
+
+            min_pred, max_pred = np.min(y_pred), np.max(y_pred)
+            y_pred_scaled = 0.5 + (y_pred - min_pred) * 4.5 / (max_pred - min_pred)
+
+            # Per-user NDCG — computing globally over the full val set trivially
+            # inflates the score to ~0.99. Average over individual users instead.
+            user_ndcg_scores = []
+            val_df_reset = val_df.reset_index(drop=True)
+            for uid in val_df_reset['user_id'].unique():
+                mask = (val_df_reset['user_id'] == uid).values
+                true_r = val_df_reset.loc[mask, 'rating'].values
+                pred_r = y_pred_scaled[mask]
+                if len(true_r) > 1:
+                    user_ndcg_scores.append(ndcg_score([true_r], [pred_r]))
+
+            return np.mean(user_ndcg_scores) if user_ndcg_scores else 0.0
+
         study = optuna.create_study(direction='maximize')
         study.optimize(objective, n_trials=50)
 
-        # Get the best parameters
         best_params = study.best_params
         np.save(f'{OUTPUT_DIR}/params/best_params.npy', best_params)
         return best_params
@@ -194,7 +243,23 @@ def tune_xgb_model(dtrain, dval, y_val):
 def train_xgb_model(dtrain, dval, best_params, timestamp):
     try:
         logger.info("Training XGBoost model...")
-        bst = xgb.train(best_params, dtrain, num_boost_round=100, evals=[(dval, 'eval')], early_stopping_rounds=10, verbose_eval=True)
+        bst = xgb.train(
+            best_params,
+            dtrain,
+            num_boost_round=500,
+            evals=[(dval, 'eval')],
+            early_stopping_rounds=20,
+            verbose_eval=10,
+            callbacks=[
+                xgb.callback.EarlyStopping(
+                    rounds=20,
+                    metric_name='rmse',
+                    data_name='eval',
+                    min_delta=1e-4
+                )
+            ]
+        )
+        logger.info(f"Best iteration: {bst.best_iteration}, Best score: {bst.best_score:.5f}")
         bst.save_model(f'{OUTPUT_DIR}/xgb/models/{timestamp}_model.json')
         return bst
     except Exception as e:

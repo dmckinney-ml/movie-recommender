@@ -179,7 +179,7 @@ def reload_hypermodel(tuner: Hyperband):
         for key, value in best_hps_values.items():
             best_hps.Fixed(key, value)
         tuned_model = tuner.hypermodel.build(best_hps)
-        tuned_model.load_weights(f'{OUTPUT_DIR}/tpe/weights/20250122063906_weights.h5')
+        tuned_model.load_weights(f'{OUTPUT_DIR}/tpe/weights/20250122063906_weights')
         return tuned_model
     except Exception as e:
         logger.error(f"Error reloading hypermodel: {e}")

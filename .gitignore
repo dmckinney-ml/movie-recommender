@@ -156,3 +156,7 @@ dmypy.json
 # Build directories
 build/
 dist/
+
+# HF things
+export_hf_artifacts.ipynb
+hf_artifacts/

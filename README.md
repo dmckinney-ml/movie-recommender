@@ -209,7 +209,7 @@ movie_recommender/
    pip install -r requirements-gcp.txt
    ```
 
-   > **Note:** Set `TF_USE_LEGACY_KERAS=1` before running. This project requires `tf_keras==2.15.1` — do **not** install standalone `keras`.
+   > **Note:** Set `TF_USE_LEGACY_KERAS=1` before running. This project requires `tf-keras==2.15.1` — do **not** install standalone `keras`. GCP Deep Learning VMs pre-install `tf-keras==2.20.1` which causes a `RecursionError` on import with TF 2.15; ensure `requirements-gcp.txt` pins `tf-keras==2.15.1` and restart the kernel after installing.
 
 3. **Authenticate with Google Cloud:**
    ```bash
@@ -239,7 +239,7 @@ The `training.ipynb` notebook walks through the full training workflow interacti
 jupyter notebook training.ipynb
 ```
 
-> **GCP training:** Hyperband tuning is resource-intensive. For best results, run on a GCP VM (`n1-highmem-8` + NVIDIA T4):
+> **GCP training:** Hyperband tuning is resource-intensive. For best results, run on a GCP VM (`g2-standard-8` + NVIDIA L4):
 >
 > ```bash
 > gcloud compute scp training.ipynb tuning-vm:~ --zone=us-central1-a --project=YOUR_PROJECT_ID
@@ -295,8 +295,9 @@ The core retrieval model (`RecommendationHyperModel`) is a multi-task model buil
 - **Shared Head**: Concatenated embeddings → Dense(units_1, ReLU) → **BatchNorm** → Dropout → Dense(units_2, ReLU) → **BatchNorm** → Dropout → Dense(1) for rating prediction
 - **Optimizer**: Adam with Exponential Decay LR schedule. Uses `tf.keras.optimizers.legacy.Adam` on macOS (Metal backend) and `tf.keras.optimizers.Adam` on Linux/GCP (CUDA).
 - **Losses**:
-  - Rating task: Mean Squared Error (`rating_weight=2.0`)
-  - Retrieval task: Factorized Top-K (`retrieval_weight=0.5`, `temperature=0.1`)
+  - Rating task: Mean Squared Error (`rating_weight=1.0`)
+  - Retrieval task: Factorized Top-K (`retrieval_weight=1.0`, `temperature=0.05`)
+- **Mixed precision**: Disabled — TFRS 0.7.3's `FactorizedTopK`/`Streaming` layers and the in-batch matmul hardcode `float32` state. Enabling `mixed_float16` triggers dtype-mismatch errors at runtime. GPU training runs in `float32`.
 - **Tuner objective**: minimize `val_root_mean_squared_error`
 - **Trial storage**: `gs://movie-data-1/tuning` (GCS)
 
@@ -336,17 +337,17 @@ After retrieving candidates via FAISS, the XGBoost model re-ranks them using `ra
 
 **Training:** `num_boost_round=500`, early stopping with `patience=20` and `min_delta=1e-4`. Best iteration: ~139, Best RMSE: `~0.878` (cold-start).
 
-**Best Hyperparameters (Optuna, 50 trials):**
+**Best Hyperparameters (Optuna, 25 trials):**
 
 | Hyperparameter     | Value  |
 | ------------------ | ------ |
-| `eta`              | 0.0727 |
-| `max_depth`        | 9      |
-| `min_child_weight` | 8      |
-| `subsample`        | 0.7098 |
-| `colsample_bytree` | 0.6422 |
-| `gamma`            | 0.1992 |
-| `lambda`           | 0.9450 |
+| `eta`              | 0.2535 |
+| `max_depth`        | 6      |
+| `min_child_weight` | 9      |
+| `subsample`        | 0.8617 |
+| `colsample_bytree` | 0.6943 |
+| `gamma`            | 0.2124 |
+| `lambda`           | 0.4620 |
 
 ### FAISS Index
 
@@ -357,6 +358,8 @@ After training, movie embeddings are extracted in batches (`batch_size=512`) and
 3. Candidate movies are re-ranked by the XGBoost model.
 
 **Why `IndexFlatIP` instead of `IndexFlatL2`?** TFRS's `Retrieval` task trains the towers by maximising **dot-product similarity** between matched (user, movie) pairs. Querying FAISS with `IndexFlatIP` keeps the retrieval metric consistent with the training objective. `IndexFlatL2` (Euclidean distance) diverges from dot product when embedding magnitudes vary — which they do here, since the towers use no L2 normalisation — and would silently retrieve suboptimal candidates.
+
+> **L2 normalisation (required):** `faiss.normalize_L2(embeddings)` is applied to both the movie embeddings at index-build time and the query vector at search time. This converts `IndexFlatIP` to cosine similarity and eliminates the magnitude/popularity bias that causes embedding collapse (hub effect) — popular movies accumulate large-magnitude embeddings and dominate inner-product rankings regardless of query direction. The inference repository must also L2-normalise query vectors before calling `index.search()`. See Lesson #14.
 
 ---
 
@@ -397,14 +400,14 @@ All evaluation uses a **cold-start user split** — test/val users are entirely 
 
 ### Neural Network (cold-start test users)
 
-| Metric                     | Value | Notes                                    |
-| -------------------------- | ----- | ---------------------------------------- |
-| Ranking RMSE               | 0.956 | Expected range for cold-start: 0.90–1.05 |
-| Retrieval Top-1 Accuracy   | 0.2%  | ~157× better than random (1/~14k titles) |
-| Retrieval Top-5 Accuracy   | 1.1%  |                                          |
-| Retrieval Top-10 Accuracy  | 2.0%  |                                          |
-| Retrieval Top-50 Accuracy  | 7.5%  | Practical retrieval window               |
-| Retrieval Top-100 Accuracy | 12.2% | ~25–40% estimated at top-300 to top-500  |
+| Metric                     | Value | Notes                                                                                      |
+| -------------------------- | ----- | ------------------------------------------------------------------------------------------ |
+| Ranking RMSE               | 1.121 | Higher than prior run; trade-off from balanced task weights (1:1) reducing rating gradient |
+| Retrieval Top-1 Accuracy   | 10.3% | ~1,471× better than random (1/~14k titles); was 0.2% before embedding-collapse fix         |
+| Retrieval Top-5 Accuracy   | 15.1% |                                                                                            |
+| Retrieval Top-10 Accuracy  | 17.6% |                                                                                            |
+| Retrieval Top-50 Accuracy  | 24.9% | Practical retrieval window                                                                 |
+| Retrieval Top-100 Accuracy | 28.6% |                                                                                            |
 
 Retrieval accuracy is a strict exact-match metric (exact held-out movie in top-K from full corpus). Low absolute numbers are expected and acceptable — the retrieval stage only needs to supply diverse candidates to XGBoost.
 
@@ -412,18 +415,18 @@ Retrieval accuracy is a strict exact-match metric (exact held-out movie in top-K
 
 Evaluated with per-user NDCG and strict precision/recall (no fallback for users with no relevant items):
 
-| Metric                        | Value  |
-| ----------------------------- | ------ |
-| NDCG Score (per-user average) | 0.9624 |
-| Precision@10 (threshold=3.5)  | 0.7875 |
-| Recall@10 (threshold=3.5)     | 0.8607 |
-| Accuracy@10 (threshold=3.5)   | 0.9980 |
-| Precision@10 (threshold=4.0)  | 0.6665 |
-| Recall@10 (threshold=4.0)     | 0.8684 |
-| Accuracy@10 (threshold=4.0)   | 0.9944 |
-| Precision@10 (threshold=4.5)  | 0.4889 |
-| Recall@10 (threshold=4.5)     | 0.8754 |
-| Accuracy@10 (threshold=4.5)   | 0.9764 |
+| Metric                                    | Value  |
+| ----------------------------------------- | ------ |
+| NDCG Score (per-user average, 1671 users) | 0.9459 |
+| Precision@10 (threshold=3.5)              | 0.7650 |
+| Recall@10 (threshold=3.5)                 | 0.8459 |
+| Accuracy@10 (threshold=3.5)               | 0.9990 |
+| Precision@10 (threshold=4.0)              | 0.6380 |
+| Recall@10 (threshold=4.0)                 | 0.8349 |
+| Accuracy@10 (threshold=4.0)               | 0.9866 |
+| Precision@10 (threshold=4.5)              | 0.4643 |
+| Recall@10 (threshold=4.5)                 | 0.8227 |
+| Accuracy@10 (threshold=4.5)               | 0.9462 |
 
 > **Note:** XGBoost val users are cold to XGBoost but warm to the neural net (their embeddings were learned during neural net training). True end-to-end cold-start would require users with no neural net training history.
 

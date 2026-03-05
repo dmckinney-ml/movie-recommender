@@ -39,12 +39,18 @@ class RecommendationModel(tfrs.Model):
         ratings = features.pop("rating")
         user_embeddings, movie_embeddings, genre_embeddings, rating_predictions = self(features)
         rating_loss = self.rating_task(labels=ratings, predictions=rating_predictions)
-        retrieval_loss = self.retrieval_task(user_embeddings, movie_embeddings)
+        # L2-normalise before the retrieval task so the contrastive loss operates on
+        # cosine similarity rather than raw dot products. Without normalisation, popular
+        # movies accumulate large-magnitude embeddings and dominate top-k regardless of
+        # query direction, causing embedding collapse / hub effect in the FAISS index.
+        user_emb_norm  = tf.nn.l2_normalize(user_embeddings, axis=-1)
+        movie_emb_norm = tf.nn.l2_normalize(movie_embeddings, axis=-1)
+        retrieval_loss = self.retrieval_task(user_emb_norm, movie_emb_norm)
         return (self.rating_weight * rating_loss
                 + self.retrieval_weight * retrieval_loss)
 
 class RecommendationHyperModel(HyperModel):
-    def __init__(self, unique_user_ids, unique_titles, num_genres, rating_weight=2.0, retrieval_weight=0.5):
+    def __init__(self, unique_user_ids, unique_titles, num_genres, rating_weight=1.0, retrieval_weight=1.0):
         self.unique_user_ids = unique_user_ids
         self.unique_titles = unique_titles
         self.num_genres = num_genres
@@ -110,9 +116,12 @@ class RecommendationHyperModel(HyperModel):
             loss=tf.keras.losses.MeanSquaredError(),
             metrics=[tf.keras.metrics.RootMeanSquaredError()],
         )
+        # temperature=0.05 is calibrated for unit-normalised embeddings (cosine sim in
+        # [-1, 1]). compute_loss passes l2_normalised vectors to this task, so this is
+        # equivalent in sharpness to temperature=0.1 on unnormalised vectors.
         retrieval_task = tfrs.tasks.Retrieval(
             metrics=metrics,
-            temperature=0.1
+            temperature=0.05
         )
         model = RecommendationModel(user_model, movie_model, genre_model, rating_model, rating_task, retrieval_task, self.rating_weight, self.retrieval_weight)
 
@@ -210,6 +219,11 @@ def tune_xgb_model(dtrain, dval, val_df):
                 'lambda': trial.suggest_float('lambda', 0.0, 1.0),
             }
 
+            # Use GPU-accelerated histogram method on CUDA; fall back to CPU on Metal.
+            if platform.system() != 'Darwin':
+                param['device'] = 'cuda'
+                param['tree_method'] = 'hist'
+
             bst = xgb.train(param, dtrain, num_boost_round=300, evals=[(dval, 'eval')],
                             early_stopping_rounds=20, verbose_eval=False)
             y_pred = bst.predict(dval)
@@ -243,8 +257,19 @@ def tune_xgb_model(dtrain, dval, val_df):
 def train_xgb_model(dtrain, dval, best_params, timestamp):
     try:
         logger.info("Training XGBoost model...")
+        # best_params from tune_xgb_model contains only Optuna-tuned params (eta,
+        # max_depth, etc.) — not the fixed params. Merge them here so the final
+        # model always trains with rank:pairwise, not XGBoost's default objective.
+        final_params = {
+            'objective':   'rank:pairwise',
+            'eval_metric': 'ndcg',
+            **best_params,
+        }
+        if platform.system() != 'Darwin':
+            final_params['device']      = 'cuda'
+            final_params['tree_method'] = 'hist'
         bst = xgb.train(
-            best_params,
+            final_params,
             dtrain,
             num_boost_round=500,
             evals=[(dval, 'eval')],
@@ -253,7 +278,7 @@ def train_xgb_model(dtrain, dval, best_params, timestamp):
             callbacks=[
                 xgb.callback.EarlyStopping(
                     rounds=20,
-                    metric_name='rmse',
+                    metric_name='ndcg',   # must match eval_metric
                     data_name='eval',
                     min_delta=1e-4
                 )

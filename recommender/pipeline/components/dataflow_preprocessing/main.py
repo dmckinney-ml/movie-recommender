@@ -1,5 +1,5 @@
 import apache_beam as beam
-from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions, StandardOptions
+from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions, StandardOptions, WorkerOptions
 import re
 import datetime
 
@@ -8,7 +8,10 @@ timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
 options = PipelineOptions(save_main_session=True)
 google_cloud_options = options.view_as(GoogleCloudOptions)
 options.view_as(StandardOptions).runner = 'DataflowRunner'
-google_cloud_options.project = 'my-project'  # Replace with your project ID
+worker_options = options.view_as(WorkerOptions)
+worker_options.sdk_container_image = 'us-central1-docker.pkg.dev/YOUR-PROJECT-ID/YOUR-PROJECT-ID-repo/moviedata-dataflow_preprocessing:latest'
+
+google_cloud_options.project = 'YOUR-PROJECT-ID'  # Replace with your project ID
 google_cloud_options.region = 'us-central1'  # Set your region
 google_cloud_options.job_name = 'dataflow-movie-preprocessing-{}'.format(timestamp)
 google_cloud_options.staging_location = 'gs://movie-data-1/staging'  # Your GCS staging bucket
@@ -23,7 +26,7 @@ def run():
             | "Read Movies Table" >> beam.io.ReadFromBigQuery(
                 query="""
                 SELECT movieId, title, genres
-                FROM `my-project.movie_data.movies`
+                FROM `YOUR-PROJECT-ID.movie_data.movies`
                 """,
                 use_standard_sql=True
             )
@@ -35,7 +38,7 @@ def run():
             | "Read Ratings Table" >> beam.io.ReadFromBigQuery(
                 query="""
                 SELECT movieId, rating, userId, timestamp
-                FROM `my-project.movie_data.ratings`
+                FROM `YOUR-PROJECT-ID.movie_data.ratings`
                 """,
                 use_standard_sql=True
             )
@@ -49,15 +52,16 @@ def run():
             | "Replace movieId with title" >> beam.FlatMap(replace_movie_id_with_title)
         )
 
-        # Filter movies where year is after 2020
+        # Filter out ratings without a parseable year — no year-range restriction
+        # so the full 32M dataset (including pre-2021 classics) enters training.
         filtered_movies = (
             joined
-            | "Filter Joined Movies After 2020" >> beam.Filter(lambda row: row['year'] is not None and row['year'] > 2020)
+            | "Filter Ratings With Valid Year" >> beam.Filter(lambda row: row['year'] is not None)
         )
 
         # Write the filtered data to BigQuery
         filtered_movies | "Write Ratings with Titles to BigQuery" >> beam.io.WriteToBigQuery(
-            table='my-project:movie_data.ratings_with_titles',
+            table='YOUR-PROJECT-ID:movie_data.ratings_with_titles',
             schema=get_ratings_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
@@ -90,12 +94,12 @@ def run():
         preprocessed_movies = (
             movies
             | "Transform Data" >> beam.FlatMap(preprocess_movies, unique_genres=unique_genres)  # Pass unique genres for encoding
-            | "Filter Movies After 2020" >> beam.Filter(lambda row: row['year'] is not None and row['year'] > 2020)
+            | "Filter Movies With Valid Year" >> beam.Filter(lambda row: row['year'] is not None)
         )
 
         # Write the preprocessed data to BigQuery
         preprocessed_movies | "Write preprocessed movie table to BigQuery" >> beam.io.WriteToBigQuery(
-            table='my-project:movie_data.preprocessed_movies',
+            table='YOUR-PROJECT-ID:movie_data.preprocessed_movies',
             schema=get_movies_schema(),  # Dynamically generate schema
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
@@ -139,6 +143,11 @@ def replace_movie_id_with_title(element):
     ratings = grouped['ratings']
 
     if not movies:
+        return
+
+    # Exclude movies with fewer than 5 ratings to filter noise while keeping
+    # popular classics that were previously excluded by the year > 2020 filter.
+    if len(ratings) < 5:
         return
 
     title = movies[0]['title']

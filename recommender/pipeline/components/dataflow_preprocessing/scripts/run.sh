@@ -19,6 +19,10 @@ fi
 # Run the Docker container
 # Mount Google Cloud SDK config
 docker run \
+  --platform linux/amd64 \
   -v "${HOME}/.config/gcloud:/root/.config/gcloud" \
-  "$IMAGE_URI"
+  -e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \
+  --entrypoint python3 \
+  "$IMAGE_URI" \
+  /src/main.py
 

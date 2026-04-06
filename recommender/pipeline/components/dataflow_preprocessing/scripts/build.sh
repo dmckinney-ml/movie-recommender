@@ -6,8 +6,8 @@
 # Authenticate Docker with Artifact Registry
 gcloud auth configure-docker $ARTIFACT_REGISTRY_REGION-docker.pkg.dev
 
-# Build the Docker image
-docker build $COMPONENT_DIR -f $DOCKERFILE -t $IMAGE_URI
+# Build the Docker image for x86_64 (required by Dataflow GCP workers)
+docker build --platform linux/amd64 $COMPONENT_DIR -f $DOCKERFILE -t $IMAGE_URI
 
 # Push the image to Artifact Registry
 docker push $IMAGE_URI

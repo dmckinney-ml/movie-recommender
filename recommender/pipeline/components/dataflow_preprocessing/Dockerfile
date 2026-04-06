@@ -10,5 +10,5 @@ RUN apt-get update && \
 # Copy the application code into the container
 COPY . /src
 
-# Set the entrypoint to run the main script
-ENTRYPOINT ["python3", "/src/main.py"]
+# DO NOT OVERRIDE ENTRYPOINT FOR DATAFLOW WORKERS
+# Let the apache/beam base image handle the SDK harness entrypoint.

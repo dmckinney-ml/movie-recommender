@@ -235,7 +235,7 @@ if remaining_cols:
 
 ### Key Decisions
 
-- VM: `g2-standard-8` + NVIDIA L4, `us-central1-a` for low latency to BigQuery `us-central1` region.
+- VM: `n1-highmem-16` + NVIDIA T4, `us-central1-a` for low latency to BigQuery `us-central1` region.
 - Trials written directly to GCS (`gs://movie-data-1/tuning`) so Hyperband can resume after VM interruptions.
 - Two separate requirements files: `requirements-local.txt` (adds `tensorflow-metal`, `jupyter`, `ipykernel`) and `requirements-gcp.txt` (no Metal, standard TF).
 
@@ -282,6 +282,38 @@ else:
 
 ---
 
+## 14. OOM During XGBoost Feature Matrix Construction
+
+### Problem
+
+The script was OOM-killed on a GCP `n1-highmem-16` VM (104GB RAM) when building the XGBoost DMatrix for 25.5 million interactions. The code converted a `tf.data.Dataset` to a Pandas DataFrame, used `.apply()` to construct huge per-row feature arrays, stacked them with `np.vstack()`, and then passed them to `xgb.DMatrix()`, holding 4 massive allocations in RAM simultaneously.
+
+### Fix
+
+Replaced the Pandas `.apply()` with a vectorized NumPy approach. Constructed `X_train` using `np.fromiter()` for fast dictionary lookups and fancy indexing directly into the pre-computed `user_embs` and `movie_embs` arrays. Most critically, explicit memory management (`del X_train; gc.collect()`) was added before building `X_val` to prevent holding both massive matrices at once. The preparation time dropped from 4+ hours (before crashing) to ~3 minutes.
+
+### Lesson
+
+> Never hold massive Pandas DataFrames, array-column intermediate objects, `np.vstack` results, and `xgb.DMatrix` objects in memory simultaneously for 32M+ datasets. Use vectorized NumPy array indexing, and explicitly aggressively release memory (`del`, `gc.collect()`) between dataset splits.
+
+---
+
+## 15. Recall@K Evaluation Interpretation
+
+### Problem
+
+When moving from a small 1,600-user pilot to the full 32,000-user validation cohort, `Recall@10` plummeted from ~0.84 to ~0.22, appearing as a severe regression.
+
+### Fix / Explanation
+
+There was no regression. `Recall@K` evaluates the percentage of _total relevant items_ retrieved in the top `K`. A user in the pilot set had very few ratings (e.g., 12 relevant items), so finding 10 items yielded a maximum possible recall of 10/12 = ~0.83. The full distribution averages ~160 ratings per user, with ~130 of those being "relevant" (≥3.5 rating). Thus, the maximum possible `Recall@10` for an average user is 10/130 = ~0.076. A score of 0.22 across 32,000 diverse users is mathematically correct and highly performant compared to random chance.
+
+### Lesson
+
+> `Recall@K` is mathematically bounded by the number of relevant items a user has. Always evaluate recall in the context of the dataset's average per-user interaction count. High recall on small pilot sets is often an artificial artifact of users having almost exactly `K` relevant items in total.
+
+---
+
 ## Summary Table
 
 | #   | Issue                                    | Impact                     | Fix                                                         |
@@ -298,6 +330,9 @@ else:
 | 10  | Unconditional feature hstack             | Crash on empty columns     | Guard with `if remaining_cols`                              |
 | 11  | Local tuner storage                      | Lost trials on VM reclaim  | GCS-backed tuner directory                                  |
 | 12  | Wrong HPO objective                      | Tuner optimises wrong task | Switch to `val_root_mean_squared_error`                     |
+| 13  | Inference pipeline OOV titles            | KeyError on missing movie  | Fallback to zero vector                                     |
+| 14  | OOM building XGB DMatrix                 | Script OOM killed (104GB)  | Vectorized indexing + sequential release (`del`/`gc`)       |
+| 15  | Recall@10 perceived regression           | Confusion on 0.22 recall   | Contextualize metric against avg per-user relevant items    |
 | 13  | OOV titles at inference                  | KeyError crash             | Zero-vector fallback                                        |
 | 14  | Embedding collapse / hub effect          | Same top-10 for all users  | L2-norm embeddings + balanced task weights                  |
 | 15  | TFRS 0.7.3 + mixed_float16               | Runtime dtype crash        | Remove mixed precision; TFRS is float32-only                |

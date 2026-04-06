@@ -35,7 +35,7 @@ The Movie Recommender is a production-grade recommendation system that leverages
 1. **Retrieval**: A multi-task neural network generates user and movie embeddings, queried efficiently at inference via a FAISS index.
 2. **Ranking**: An XGBoost model re-ranks candidate movies using rich feature vectors derived from the embeddings.
 
-Trained on the **[MovieLens 32M](https://grouplens.org/datasets/movielens/32m/)** dataset — a stable benchmark containing **32 million ratings** and **2 million tag applications** applied to **87,585 movies** by **200,948 users**. Ratings data is stored in BigQuery and preprocessed via Apache Beam on Cloud Dataflow before training.
+Trained on the **[MovieLens 32M](https://grouplens.org/datasets/movielens/32m/)** dataset — a stable benchmark originally containing **32 million ratings** and **2 million tag applications** applied to **87,585 movies** by **200,948 users**. After data cleaning, the active training set comprises **~31.9 million ratings** across **80,569 unique titles**. Ratings data is stored in BigQuery and preprocessed via Apache Beam on Cloud Dataflow before training.
 
 The system is orchestrated as a Kubeflow pipeline on Google Cloud's Vertex AI, with preprocessing handled by Apache Beam on Dataflow and training containerized via Docker.
 
@@ -239,7 +239,7 @@ The `training.ipynb` notebook walks through the full training workflow interacti
 jupyter notebook training.ipynb
 ```
 
-> **GCP training:** Hyperband tuning is resource-intensive. For best results, run on a GCP VM (`g2-standard-8` + NVIDIA L4):
+> **GCP training:** Hyperband tuning is resource-intensive. For best results, run on a GCP VM (`n1-highmem-16` + NVIDIA T4):
 >
 > ```bash
 > gcloud compute scp training.ipynb tuning-vm:~ --zone=us-central1-a --project=YOUR_PROJECT_ID
@@ -321,7 +321,7 @@ The core retrieval model (`RecommendationHyperModel`) is a multi-task model buil
 | --------------- | ------------- | ----------------------- | -------------------------------- |
 | Hyperband (TPE) | `keras-tuner` | max 12 epochs, factor=3 | `gs://movie-data-1/tuning` (GCS) |
 
-Tuning is run on a GCP VM (`n1-highmem-8` + NVIDIA T4) to avoid Apple Silicon memory constraints. Trial checkpoints are written directly to GCS.
+Tuning is run on a GCP VM (`n1-highmem-16` + NVIDIA T4) to avoid Apple Silicon memory constraints. Trial checkpoints are written directly to GCS.
 
 ### XGBoost Ranker
 
@@ -335,19 +335,19 @@ After retrieving candidates via FAISS, the XGBoost model re-ranks them using `ra
 
 **Data split:** User-level cold-start split (80/20 by `user_id`) — val users are entirely unseen during XGBoost training, mirroring the neural net split.
 
-**Training:** `num_boost_round=500`, early stopping with `patience=20` and `min_delta=1e-4`. Best iteration: ~139, Best RMSE: `~0.878` (cold-start).
+**Training:** `num_boost_round=500`, early stopping with `patience=20` and `min_delta=1e-4`. Best iteration: 192, Best NDCG (internal): `0.91124` (cold-start).
 
 **Best Hyperparameters (Optuna, 25 trials):**
 
 | Hyperparameter     | Value  |
 | ------------------ | ------ |
-| `eta`              | 0.2535 |
-| `max_depth`        | 6      |
+| `eta`              | 0.2702 |
+| `max_depth`        | 10     |
 | `min_child_weight` | 9      |
-| `subsample`        | 0.8617 |
-| `colsample_bytree` | 0.6943 |
-| `gamma`            | 0.2124 |
-| `lambda`           | 0.4620 |
+| `subsample`        | 0.6890 |
+| `colsample_bytree` | 0.8040 |
+| `gamma`            | 0.4210 |
+| `lambda`           | 0.4410 |
 
 ### FAISS Index
 
@@ -400,14 +400,14 @@ All evaluation uses a **cold-start user split** — test/val users are entirely 
 
 ### Neural Network (cold-start test users)
 
-| Metric                     | Value | Notes                                                                                      |
-| -------------------------- | ----- | ------------------------------------------------------------------------------------------ |
-| Ranking RMSE               | 1.121 | Higher than prior run; trade-off from balanced task weights (1:1) reducing rating gradient |
-| Retrieval Top-1 Accuracy   | 10.3% | ~1,471× better than random (1/~14k titles); was 0.2% before embedding-collapse fix         |
-| Retrieval Top-5 Accuracy   | 15.1% |                                                                                            |
-| Retrieval Top-10 Accuracy  | 17.6% |                                                                                            |
-| Retrieval Top-50 Accuracy  | 24.9% | Practical retrieval window                                                                 |
-| Retrieval Top-100 Accuracy | 28.6% |                                                                                            |
+| Metric                     | Value | Notes                                                                 |
+| -------------------------- | ----- | --------------------------------------------------------------------- |
+| Ranking RMSE               | 0.973 | Strong improvement; better aligns with ranker rating predictions      |
+| Retrieval Top-1 Accuracy   | 9.1%  | ~1,300× better than random (1/~14k titles); slight drop for RMSE gain |
+| Retrieval Top-5 Accuracy   | 12.6% |                                                                       |
+| Retrieval Top-10 Accuracy  | 14.2% |                                                                       |
+| Retrieval Top-50 Accuracy  | 18.7% | Practical retrieval window                                            |
+| Retrieval Top-100 Accuracy | 21.1% |                                                                       |
 
 Retrieval accuracy is a strict exact-match metric (exact held-out movie in top-K from full corpus). Low absolute numbers are expected and acceptable — the retrieval stage only needs to supply diverse candidates to XGBoost.
 
@@ -415,19 +415,21 @@ Retrieval accuracy is a strict exact-match metric (exact held-out movie in top-K
 
 Evaluated with per-user NDCG and strict precision/recall (no fallback for users with no relevant items):
 
-| Metric                                    | Value  |
-| ----------------------------------------- | ------ |
-| NDCG Score (per-user average, 1671 users) | 0.9459 |
-| Precision@10 (threshold=3.5)              | 0.7650 |
-| Recall@10 (threshold=3.5)                 | 0.8459 |
-| Accuracy@10 (threshold=3.5)               | 0.9990 |
-| Precision@10 (threshold=4.0)              | 0.6380 |
-| Recall@10 (threshold=4.0)                 | 0.8349 |
-| Accuracy@10 (threshold=4.0)               | 0.9866 |
-| Precision@10 (threshold=4.5)              | 0.4643 |
-| Recall@10 (threshold=4.5)                 | 0.8227 |
-| Accuracy@10 (threshold=4.5)               | 0.9462 |
+| Metric                                     | Value  |
+| ------------------------------------------ | ------ |
+| NDCG Score (per-user average, 32152 users) | 0.9613 |
+| Precision@10 (threshold=3.5)               | 0.8385 |
+| Recall@10 (threshold=3.5)                  | 0.2219 |
+| Accuracy@10 (threshold=3.5)                | 0.9988 |
+| Precision@10 (threshold=4.0)               | 0.7723 |
+| Recall@10 (threshold=4.0)                  | 0.2351 |
+| Accuracy@10 (threshold=4.0)                | 0.9974 |
+| Precision@10 (threshold=4.5)               | 0.5047 |
+| Recall@10 (threshold=4.5)                  | 0.2951 |
+| Accuracy@10 (threshold=4.5)                | 0.9752 |
 
+> **Note on Recall:** The recall numbers reflect evaluating against the full distribution of users (~160 ratings/user avg). A user with 100 relevant items can mathematically achieve a maximum Recall@10 of 10%. Measurements on small pilot sets often artificially inflate recall by focusing on users with very few ratings.
+>
 > **Note:** XGBoost val users are cold to XGBoost but warm to the neural net (their embeddings were learned during neural net training). True end-to-end cold-start would require users with no neural net training history.
 
 ---

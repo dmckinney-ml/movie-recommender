@@ -72,6 +72,7 @@ tensorflow-io-gcs-filesystem==0.37.1
 tensorflow-ranking==0.5.5
 tensorflow-serving-api==2.15.1
 tensorflow-recommenders==0.7.3
+tf-keras==2.15.1
 termcolor==3.3.0
 threadpoolctl==3.6.0
 tqdm==4.67.3
